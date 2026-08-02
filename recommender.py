@@ -91,6 +91,35 @@ def _outfit_score(items: tuple[Product, Product, Product], budget: int) -> float
                  + sum(len(item.scenes) + len(item.styles) for item in items) * 0.05, 3)
 
 
+def _base_sort_key(outfit: Outfit) -> tuple[float, int, tuple[str, str, str]]:
+    """返回基础匹配排序键：分数降序、总价升序、商品 ID 升序。"""
+    return (-outfit.score, outfit.total_price, outfit.product_ids)
+
+
+def _rerank_for_diversity(candidates: Sequence[Outfit], limit: int) -> list[Outfit]:
+    """在不丢弃候选的前提下，贪心选择商品重复最少的搭配。"""
+    if not candidates or limit == 0:
+        return []
+
+    remaining = list(candidates)
+    selected = [remaining.pop(0)]
+    used_product_ids = set(selected[0].product_ids)
+
+    while remaining and len(selected) < limit:
+        next_index = min(
+            range(len(remaining)),
+            key=lambda index: (
+                len(used_product_ids.intersection(remaining[index].product_ids)),
+                _base_sort_key(remaining[index]),
+            ),
+        )
+        chosen = remaining.pop(next_index)
+        selected.append(chosen)
+        used_product_ids.update(chosen.product_ids)
+
+    return selected
+
+
 def recommend_outfits(
     csv_path: str | Path, *, budget: int, top_size: str, bottom_size: str,
     scene: str, style: str, excluded_colors: Iterable[str] = (), limit: int = 3,
@@ -119,5 +148,5 @@ def recommend_outfits(
             continue
         seen.add(ids)
         candidates.append(Outfit(top, bottom, shoe, total, _outfit_score((top, bottom, shoe), budget)))
-    candidates.sort(key=lambda outfit: (-outfit.score, outfit.total_price, outfit.product_ids))
-    return candidates[:limit]
+    candidates.sort(key=_base_sort_key)
+    return _rerank_for_diversity(candidates, limit)
