@@ -35,6 +35,18 @@ st.title("👔 穿搭推荐 MVP")
 st.write("选择你的需求，我们会从本地演示商品中组合最多三套穿搭。")
 st.info("当前商品均为演示数据，不代表真实库存、价格或购买链接。")
 
+with st.container(border=True):
+    st.subheader("上传服装图片")
+    uploaded_image = st.file_uploader(
+        "选择一张服装照片",
+        type=["jpg", "jpeg", "png"],
+        help="支持 JPG、JPEG 和 PNG 格式。",
+    )
+    st.info("当前版本仅支持图片上传与预览，图片分析功能将在下一版本接入。")
+    if uploaded_image is not None:
+        st.image(uploaded_image, caption="图片预览", width=360)
+        st.caption(f"文件名：{uploaded_image.name}")
+
 with st.form("recommendation_form"):
     scene = st.selectbox("场景", ["通勤", "休闲", "约会", "旅行"])
     budget = st.slider("整套预算（元）", 600, 2000, 1200, 50)
