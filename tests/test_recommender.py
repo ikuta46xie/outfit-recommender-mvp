@@ -138,6 +138,27 @@ def test_image_guided_results_are_reproducible():
     assert first == second
 
 
+def test_v04_image_guided_order_and_scores_remain_unchanged():
+    preference = ImagePreference("image-hash:qwen3.7-flash", "黑色", "商务")
+    outfits = recommend_outfits(
+        DATA_PATH,
+        budget=1400,
+        top_size="M",
+        bottom_size="M",
+        scene="通勤",
+        style="商务",
+        image_preference=preference,
+    )
+
+    assert [outfit.product_ids for outfit in outfits] == [
+        ("TOP006", "BOTTOM007", "SHOES002"),
+        ("TOP002", "BOTTOM002", "SHOES004"),
+        ("TOP001", "BOTTOM001", "SHOES002"),
+    ]
+    assert [outfit.score for outfit in outfits] == [18.818, 17.046, 17.225]
+    assert [outfit.image_preference_bonus for outfit in outfits] == [2.55, 2.1, 2.1]
+
+
 def test_image_preference_does_not_bypass_any_hard_filter():
     preference = ImagePreference("image-hash:qwen3.7-flash", "黑色", "商务")
     outfits = recommend_outfits(
