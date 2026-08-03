@@ -2,7 +2,8 @@ from pathlib import Path
 
 import pytest
 
-from recommender import load_products, recommend_outfits
+from image_preferences import ImagePreference
+from recommender import MAX_IMAGE_PREFERENCE_BONUS, load_products, recommend_outfits
 
 
 DATA_PATH = Path(__file__).parents[1] / "data" / "products.csv"
@@ -89,3 +90,99 @@ def test_demo_catalog_has_24_balanced_products():
     counts = {category: sum(item.category == category for item in products)
               for category in ("上衣", "裤子", "鞋子")}
     assert counts == {"上衣": 8, "裤子": 8, "鞋子": 8}
+
+
+def test_normal_mode_keeps_v03_default_order_and_scores(recommendations):
+    assert [outfit.product_ids for outfit in recommendations] == [
+        ("TOP006", "BOTTOM007", "SHOES002"),
+        ("TOP002", "BOTTOM001", "SHOES007"),
+        ("TOP001", "BOTTOM004", "SHOES001"),
+    ]
+    assert [outfit.score for outfit in recommendations] == [16.963, 16.054, 15.696]
+    assert all(outfit.score == outfit.base_score for outfit in recommendations)
+    assert all(outfit.image_preference_bonus == 0 for outfit in recommendations)
+    assert all(not outfit.recommendation_reasons for outfit in recommendations)
+
+
+def test_black_business_preference_adds_a_bounded_soft_score():
+    preference = ImagePreference("image-hash:qwen3.7-flash", "黑色", "商务")
+    outfits = recommend_outfits(
+        DATA_PATH,
+        budget=1400,
+        top_size="M",
+        bottom_size="M",
+        scene="通勤",
+        style="商务",
+        image_preference=preference,
+    )
+
+    assert outfits
+    assert all(0 < outfit.image_preference_bonus <= MAX_IMAGE_PREFERENCE_BONUS for outfit in outfits)
+    assert all(outfit.score == pytest.approx(outfit.base_score + outfit.image_preference_bonus)
+               for outfit in outfits)
+
+
+def test_image_guided_results_are_reproducible():
+    preference = ImagePreference("image-hash:qwen3.7-flash", "黑色", "商务")
+    arguments = dict(
+        budget=1400,
+        top_size="M",
+        bottom_size="M",
+        scene="通勤",
+        style="商务",
+        image_preference=preference,
+    )
+    first = recommend_outfits(DATA_PATH, **arguments)
+    second = recommend_outfits(DATA_PATH, **arguments)
+
+    assert first == second
+
+
+def test_image_preference_does_not_bypass_any_hard_filter():
+    preference = ImagePreference("image-hash:qwen3.7-flash", "黑色", "商务")
+    outfits = recommend_outfits(
+        DATA_PATH,
+        budget=1100,
+        top_size="M",
+        bottom_size="L",
+        scene="通勤",
+        style="简约",
+        excluded_colors=["黑色"],
+        image_preference=preference,
+    )
+    source_ids = {product.id for product in load_products(DATA_PATH)}
+
+    assert outfits
+    for outfit in outfits:
+        assert outfit.total_price <= 1100
+        assert "M" in outfit.top.sizes
+        assert "L" in outfit.bottom.sizes
+        for item in (outfit.top, outfit.bottom, outfit.shoes):
+            assert "通勤" in item.scenes
+            assert "简约" in item.styles
+            assert item.color != "黑色"
+            assert item.id in source_ids
+
+
+def test_recommendation_reasons_match_actual_color_or_style_hits():
+    preference = ImagePreference("image-hash:qwen3.7-flash", "黑色", "商务")
+    outfits = recommend_outfits(
+        DATA_PATH,
+        budget=1400,
+        top_size="M",
+        bottom_size="M",
+        scene="通勤",
+        style="商务",
+        image_preference=preference,
+    )
+
+    for outfit in outfits:
+        items = (outfit.top, outfit.bottom, outfit.shoes)
+        assert 1 <= len(outfit.recommendation_reasons) <= 2
+        for reason in outfit.recommendation_reasons:
+            if "与图片主色一致" in reason:
+                assert any(item.name in reason and item.color == "黑色" for item in items)
+            elif "用户确认的商务风格" in reason:
+                assert any("商务" in item.styles for item in items)
+            else:
+                assert "与黑色形成" in reason
