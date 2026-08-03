@@ -5,6 +5,17 @@ from pathlib import Path
 import streamlit as st
 from streamlit.errors import StreamlitSecretNotFoundError
 
+from anchor_item import (
+    ANCHOR_CATEGORIES,
+    CATEGORY_UNSPECIFIED,
+    AnchorItem,
+    AnchorValidationError,
+    build_confirmed_anchor,
+    confirmed_anchor_for,
+    infer_anchor_defaults,
+    store_confirmed_anchor,
+)
+from anchor_recommender import AnchoredOutfit, recommend_anchor_outfits
 from image_preferences import (
     REFERENCE_STYLES,
     UNSPECIFIED,
@@ -31,12 +42,24 @@ from vision_analyzer import (
 DATA_PATH = Path(__file__).parent / "data" / "products.csv"
 NORMAL_MODE = "普通推荐"
 IMAGE_GUIDED_MODE = "参考图片偏好"
+ANCHOR_MODE = "围绕图片单品"
 st.set_page_config(page_title="穿搭推荐 MVP", page_icon="👔", layout="centered")
 
 
 @st.cache_data
 def available_colors() -> list[str]:
     return sorted({product.color for product in load_products(DATA_PATH)})
+
+
+@st.cache_data
+def available_shoe_sizes() -> list[str]:
+    sizes = {
+        size
+        for product in load_products(DATA_PATH)
+        if product.category == "鞋子"
+        for size in product.sizes
+    }
+    return sorted(sizes, key=int)
 
 
 def show_product(label: str, product_name: str, color: str, price: int, size: str) -> None:
@@ -61,6 +84,41 @@ def show_outfit(index: int, outfit: Outfit, *, image_guided: bool = False) -> No
                 st.caption(f"• {reason}")
         else:
             st.markdown(f"**总价：¥{outfit.total_price}**　匹配分：{outfit.score:.1f}")
+
+
+def show_anchor_slot(label: str, anchor: AnchorItem) -> None:
+    st.markdown(f"**{label}｜我的单品**")
+    st.markdown(f"**{anchor.name}**")
+    st.caption(
+        f"{anchor.primary_color or UNSPECIFIED} · {anchor.style or UNSPECIFIED}"
+    )
+    st.caption("自有单品，不计入预算")
+
+
+def show_anchored_outfit(index: int, outfit: AnchoredOutfit) -> None:
+    with st.container(border=True):
+        st.subheader(f"搭配 {index}")
+        columns = st.columns(3)
+        for column, category in zip(columns, ("上衣", "裤子", "鞋子")):
+            item = outfit.item_for_category(category)
+            with column:
+                if isinstance(item, AnchorItem):
+                    show_anchor_slot(category, item)
+                else:
+                    show_product(
+                        category,
+                        item.name,
+                        item.color,
+                        item.price,
+                        "/".join(item.sizes),
+                    )
+        st.markdown(
+            f"**需购买商品总价：¥{outfit.total_price}**　"
+            f"基础匹配分：{outfit.base_score:.1f}　"
+            f"锚点匹配加分：+{outfit.anchor_match_bonus:.1f}"
+        )
+        for reason in outfit.recommendation_reasons:
+            st.caption(f"• {reason}")
 
 
 def load_qwen_config() -> QwenConfig | None:
@@ -136,12 +194,86 @@ def show_preference_confirmation(
     return confirmed_preference_for(st.session_state, cache_key)
 
 
+def show_anchor_confirmation(
+    result: VisionAnalysis, cache_key: str
+) -> AnchorItem | None:
+    """展示锚点单品确认模块；确认动作本身不会触发视觉 API。"""
+    colors = available_colors()
+    automatic_name, automatic_category, automatic_color, automatic_style = (
+        infer_anchor_defaults(
+            result.category,
+            result.items,
+            result.primary_color,
+            result.style_tags,
+            colors,
+        )
+    )
+    category_options = [CATEGORY_UNSPECIFIED, *ANCHOR_CATEGORIES]
+    color_options = [UNSPECIFIED, *colors]
+    style_options = [*REFERENCE_STYLES, UNSPECIFIED]
+
+    with st.container(border=True):
+        st.subheader("围绕图片中的单品搭配")
+        st.info(
+            "此功能适合主体明确的单件服装图片；如图片中有多件服装，请手动确认要使用的单品。"
+        )
+        selected_name = st.text_input(
+            "单品名称",
+            value=automatic_name,
+            max_chars=30,
+            key=f"anchor_name_{cache_key}",
+        )
+        selected_category = st.selectbox(
+            "单品类别",
+            category_options,
+            index=category_options.index(automatic_category),
+            key=f"anchor_category_{cache_key}",
+        )
+        selected_color = st.selectbox(
+            "单品主色",
+            color_options,
+            index=color_options.index(automatic_color),
+            key=f"anchor_color_{cache_key}",
+        )
+        selected_style = st.selectbox(
+            "单品风格",
+            style_options,
+            index=style_options.index(automatic_style),
+            key=f"anchor_style_{cache_key}",
+        )
+        if st.button(
+            "确认这件单品并补全搭配",
+            key=f"confirm_anchor_{cache_key}",
+        ):
+            try:
+                anchor = build_confirmed_anchor(
+                    cache_key,
+                    automatic_name=automatic_name,
+                    automatic_category=automatic_category,
+                    automatic_color=automatic_color,
+                    automatic_style=automatic_style,
+                    selected_name=selected_name,
+                    selected_category=selected_category,
+                    selected_color=selected_color,
+                    selected_style=selected_style,
+                    available_colors=colors,
+                )
+            except AnchorValidationError as error:
+                st.error(error.user_message)
+            else:
+                store_confirmed_anchor(st.session_state, anchor)
+                st.success("自有单品已确认，可选择“围绕图片单品”模式。")
+
+    return confirmed_anchor_for(st.session_state, cache_key)
+
+
 st.title("👔 穿搭推荐 MVP")
 st.write("选择你的需求，我们会从本地演示商品中组合最多三套穿搭。")
 st.info("当前商品均为演示数据，不代表真实库存、价格或购买链接。")
 
 current_cache_key: str | None = None
 current_image_preference: ImagePreference | None = None
+current_anchor_item: AnchorItem | None = None
 
 with st.container(border=True):
     st.subheader("上传服装图片")
@@ -216,53 +348,92 @@ with st.container(border=True):
                         analysis_result,
                         cache_key,
                     )
+                    current_anchor_item = show_anchor_confirmation(
+                        analysis_result,
+                        cache_key,
+                    )
+
+available_modes = [NORMAL_MODE]
+if current_image_preference is not None:
+    available_modes.append(IMAGE_GUIDED_MODE)
+if current_anchor_item is not None:
+    available_modes.append(ANCHOR_MODE)
 
 with st.form("recommendation_form"):
+    recommendation_mode = st.radio(
+        "推荐模式",
+        available_modes,
+        horizontal=len(available_modes) > 1,
+        disabled=len(available_modes) == 1,
+        key=f"recommendation_mode_{current_cache_key or 'without_image'}",
+    )
+    if len(available_modes) == 1:
+        st.caption("完成图片分析并确认偏好或自有单品后，可使用对应推荐模式。")
     scene = st.selectbox("场景", ["通勤", "休闲", "约会", "旅行"])
-    budget = st.slider("整套预算（元）", 600, 2000, 1200, 50)
-    left, right = st.columns(2)
+    budget_label = (
+        "补全单品预算（不含自有单品）"
+        if recommendation_mode == ANCHOR_MODE
+        else "整套预算（元）"
+    )
+    budget = st.slider(budget_label, 600, 2000, 1200, 50)
+    left, middle, right = st.columns(3)
     with left:
         top_size = st.selectbox("上衣尺码", ["S", "M", "L", "XL"], index=1)
-    with right:
+    with middle:
         bottom_size = st.selectbox("裤子尺码", ["S", "M", "L", "XL"], index=1)
+    with right:
+        shoe_sizes = available_shoe_sizes()
+        shoe_size = st.selectbox(
+            "鞋码",
+            shoe_sizes,
+            index=shoe_sizes.index("40"),
+            help="仅在围绕图片单品且需要推荐鞋子时参与筛选。",
+        )
     style = st.selectbox("风格", ["简约", "休闲", "商务", "运动"])
     excluded_colors = st.multiselect("排除颜色（可多选）", available_colors())
-    if current_image_preference is None:
-        recommendation_mode = st.radio(
-            "推荐模式",
-            [NORMAL_MODE],
-            disabled=True,
-            key="recommendation_mode_without_preference",
-        )
-        st.caption("完成图片分析并确认偏好后，可使用“参考图片偏好”模式。")
-    else:
-        recommendation_mode = st.radio(
-            "推荐模式",
-            [NORMAL_MODE, IMAGE_GUIDED_MODE],
-            horizontal=True,
-            key=f"recommendation_mode_{current_cache_key}",
-        )
-        if recommendation_mode == IMAGE_GUIDED_MODE:
-            st.info("图片偏好只影响排序，预算、尺码和排除颜色仍为硬性条件。")
+    if recommendation_mode == IMAGE_GUIDED_MODE:
+        st.info("图片偏好只影响排序，预算、尺码和排除颜色仍为硬性条件。")
+    elif recommendation_mode == ANCHOR_MODE:
+        st.info("自有单品不计入预算；预算、尺码、场景、原风格和排除颜色仍是硬性条件。")
     submitted = st.form_submit_button("生成穿搭", type="primary", use_container_width=True)
 
 if submitted:
-    preference = (
-        current_image_preference
-        if recommendation_mode == IMAGE_GUIDED_MODE
-        else None
-    )
-    outfits = recommend_outfits(DATA_PATH, budget=budget, top_size=top_size,
-        bottom_size=bottom_size, scene=scene, style=style,
-        excluded_colors=excluded_colors, limit=3,
-        image_preference=preference)
-    if not outfits:
-        st.warning("当前条件下没有符合预算的完整搭配，请提高预算或减少筛选条件。")
+    if recommendation_mode == ANCHOR_MODE and current_anchor_item is not None:
+        anchored_outfits = recommend_anchor_outfits(
+            DATA_PATH,
+            anchor=current_anchor_item,
+            budget=budget,
+            top_size=top_size,
+            bottom_size=bottom_size,
+            shoe_size=shoe_size,
+            scene=scene,
+            style=style,
+            excluded_colors=excluded_colors,
+            limit=3,
+        )
+        if not anchored_outfits:
+            st.warning("当前条件下没有可补齐的搭配，请提高补全预算或减少筛选条件。")
+        else:
+            st.success(f"找到 {len(anchored_outfits)} 套补全搭配")
+            for number, outfit in enumerate(anchored_outfits, start=1):
+                show_anchored_outfit(number, outfit)
     else:
-        st.success(f"找到 {len(outfits)} 套符合条件的搭配")
-        for number, outfit in enumerate(outfits, start=1):
-            show_outfit(
-                number,
-                outfit,
-                image_guided=recommendation_mode == IMAGE_GUIDED_MODE,
-            )
+        preference = (
+            current_image_preference
+            if recommendation_mode == IMAGE_GUIDED_MODE
+            else None
+        )
+        outfits = recommend_outfits(DATA_PATH, budget=budget, top_size=top_size,
+            bottom_size=bottom_size, scene=scene, style=style,
+            excluded_colors=excluded_colors, limit=3,
+            image_preference=preference)
+        if not outfits:
+            st.warning("当前条件下没有符合预算的完整搭配，请提高预算或减少筛选条件。")
+        else:
+            st.success(f"找到 {len(outfits)} 套符合条件的搭配")
+            for number, outfit in enumerate(outfits, start=1):
+                show_outfit(
+                    number,
+                    outfit,
+                    image_guided=recommendation_mode == IMAGE_GUIDED_MODE,
+                )

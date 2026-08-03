@@ -8,37 +8,12 @@ from itertools import product as cartesian_product
 from pathlib import Path
 from typing import Iterable, Sequence
 
-from image_preferences import ImagePreference
+from image_preferences import ImagePreference, colors_coordinate, is_neutral_coordination
 
 
 CATEGORIES = ("上衣", "裤子", "鞋子")
 REQUIRED_COLUMNS = {"id", "name", "category", "color", "price", "sizes", "scenes", "styles", "data_label"}
 MAX_IMAGE_PREFERENCE_BONUS = 3.0
-_NEUTRAL_COLORS = frozenset({"黑色", "白色", "灰色", "米色", "藏蓝"})
-_COORDINATING_COLOR_PAIRS = frozenset({
-    frozenset(("黑色", "白色")),
-    frozenset(("黑色", "灰色")),
-    frozenset(("黑色", "米色")),
-    frozenset(("黑色", "藏蓝")),
-    frozenset(("白色", "灰色")),
-    frozenset(("白色", "米色")),
-    frozenset(("白色", "藏蓝")),
-    frozenset(("灰色", "米色")),
-    frozenset(("灰色", "藏蓝")),
-    frozenset(("米色", "藏蓝")),
-    frozenset(("蓝色", "白色")),
-    frozenset(("蓝色", "灰色")),
-    frozenset(("蓝色", "米色")),
-    frozenset(("蓝色", "藏蓝")),
-    frozenset(("粉色", "白色")),
-    frozenset(("粉色", "灰色")),
-    frozenset(("粉色", "米色")),
-    frozenset(("绿色", "米色")),
-    frozenset(("绿色", "卡其色")),
-    frozenset(("绿色", "棕色")),
-    frozenset(("卡其色", "棕色")),
-    frozenset(("卡其色", "藏蓝")),
-})
 
 
 @dataclass(frozen=True)
@@ -122,10 +97,6 @@ def _outfit_score(items: tuple[Product, Product, Product], budget: int) -> float
                  + sum(len(item.scenes) + len(item.styles) for item in items) * 0.05, 3)
 
 
-def _colors_coordinate(first: str, second: str) -> bool:
-    return first != second and frozenset((first, second)) in _COORDINATING_COLOR_PAIRS
-
-
 def _image_preference_score(
     items: tuple[Product, Product, Product],
     preference: ImagePreference | None,
@@ -140,7 +111,7 @@ def _image_preference_score(
         exact_items = [item for item in items if item.color == preference.primary_color]
         coordinated_items = [
             item for item in items
-            if _colors_coordinate(item.color, preference.primary_color)
+            if colors_coordinate(item.color, preference.primary_color)
         ]
         bonus += len(exact_items) * 0.8
         bonus += len(coordinated_items) * 0.35
@@ -148,7 +119,7 @@ def _image_preference_score(
             reasons.append(f"{exact_items[0].name}与图片主色一致")
         if coordinated_items:
             item = coordinated_items[0]
-            if item.color in _NEUTRAL_COLORS and preference.primary_color in _NEUTRAL_COLORS:
+            if is_neutral_coordination(item.color, preference.primary_color):
                 reasons.append(f"{item.name}与{preference.primary_color}形成中性色协调")
             else:
                 reasons.append(f"{item.name}与{preference.primary_color}形成协调配色")
