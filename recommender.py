@@ -8,9 +8,37 @@ from itertools import product as cartesian_product
 from pathlib import Path
 from typing import Iterable, Sequence
 
+from image_preferences import ImagePreference
+
 
 CATEGORIES = ("上衣", "裤子", "鞋子")
 REQUIRED_COLUMNS = {"id", "name", "category", "color", "price", "sizes", "scenes", "styles", "data_label"}
+MAX_IMAGE_PREFERENCE_BONUS = 3.0
+_NEUTRAL_COLORS = frozenset({"黑色", "白色", "灰色", "米色", "藏蓝"})
+_COORDINATING_COLOR_PAIRS = frozenset({
+    frozenset(("黑色", "白色")),
+    frozenset(("黑色", "灰色")),
+    frozenset(("黑色", "米色")),
+    frozenset(("黑色", "藏蓝")),
+    frozenset(("白色", "灰色")),
+    frozenset(("白色", "米色")),
+    frozenset(("白色", "藏蓝")),
+    frozenset(("灰色", "米色")),
+    frozenset(("灰色", "藏蓝")),
+    frozenset(("米色", "藏蓝")),
+    frozenset(("蓝色", "白色")),
+    frozenset(("蓝色", "灰色")),
+    frozenset(("蓝色", "米色")),
+    frozenset(("蓝色", "藏蓝")),
+    frozenset(("粉色", "白色")),
+    frozenset(("粉色", "灰色")),
+    frozenset(("粉色", "米色")),
+    frozenset(("绿色", "米色")),
+    frozenset(("绿色", "卡其色")),
+    frozenset(("绿色", "棕色")),
+    frozenset(("卡其色", "棕色")),
+    frozenset(("卡其色", "藏蓝")),
+})
 
 
 @dataclass(frozen=True)
@@ -33,6 +61,9 @@ class Outfit:
     shoes: Product
     total_price: int
     score: float
+    base_score: float
+    image_preference_bonus: float = 0.0
+    recommendation_reasons: tuple[str, ...] = ()
 
     @property
     def product_ids(self) -> tuple[str, str, str]:
@@ -91,8 +122,50 @@ def _outfit_score(items: tuple[Product, Product, Product], budget: int) -> float
                  + sum(len(item.scenes) + len(item.styles) for item in items) * 0.05, 3)
 
 
+def _colors_coordinate(first: str, second: str) -> bool:
+    return first != second and frozenset((first, second)) in _COORDINATING_COLOR_PAIRS
+
+
+def _image_preference_score(
+    items: tuple[Product, Product, Product],
+    preference: ImagePreference | None,
+) -> tuple[float, tuple[str, ...]]:
+    """计算有上限的软加分，并从实际命中规则生成最多两条理由。"""
+    if preference is None:
+        return 0.0, ()
+
+    bonus = 0.0
+    reasons: list[str] = []
+    if preference.primary_color is not None:
+        exact_items = [item for item in items if item.color == preference.primary_color]
+        coordinated_items = [
+            item for item in items
+            if _colors_coordinate(item.color, preference.primary_color)
+        ]
+        bonus += len(exact_items) * 0.8
+        bonus += len(coordinated_items) * 0.35
+        if exact_items:
+            reasons.append(f"{exact_items[0].name}与图片主色一致")
+        if coordinated_items:
+            item = coordinated_items[0]
+            if item.color in _NEUTRAL_COLORS and preference.primary_color in _NEUTRAL_COLORS:
+                reasons.append(f"{item.name}与{preference.primary_color}形成中性色协调")
+            else:
+                reasons.append(f"{item.name}与{preference.primary_color}形成协调配色")
+
+    if preference.style is not None:
+        style_hits = [item for item in items if preference.style in item.styles]
+        bonus += len(style_hits) * 0.2
+        if style_hits:
+            reasons.append(f"本套包含用户确认的{preference.style}风格")
+
+    if not reasons:
+        reasons.append("未命中明确图片偏好，本套按基础匹配分排序")
+    return min(round(bonus, 3), MAX_IMAGE_PREFERENCE_BONUS), tuple(reasons[:2])
+
+
 def _base_sort_key(outfit: Outfit) -> tuple[float, int, tuple[str, str, str]]:
-    """返回基础匹配排序键：分数降序、总价升序、商品 ID 升序。"""
+    """返回最终排序键：总分降序、总价升序、商品 ID 升序。"""
     return (-outfit.score, outfit.total_price, outfit.product_ids)
 
 
@@ -123,8 +196,9 @@ def _rerank_for_diversity(candidates: Sequence[Outfit], limit: int) -> list[Outf
 def recommend_outfits(
     csv_path: str | Path, *, budget: int, top_size: str, bottom_size: str,
     scene: str, style: str, excluded_colors: Iterable[str] = (), limit: int = 3,
+    image_preference: ImagePreference | None = None,
 ) -> list[Outfit]:
-    """应用硬性筛选条件，为合法组合打分并返回最多 ``limit`` 套。"""
+    """先应用硬约束，再计算基础分与可选图片软加分并进行多样性重排。"""
     if budget <= 0:
         raise ValueError("预算必须大于 0")
     if limit < 0:
@@ -147,6 +221,18 @@ def recommend_outfits(
         if total > budget or ids in seen:
             continue
         seen.add(ids)
-        candidates.append(Outfit(top, bottom, shoe, total, _outfit_score((top, bottom, shoe), budget)))
+        items = (top, bottom, shoe)
+        base_score = _outfit_score(items, budget)
+        preference_bonus, reasons = _image_preference_score(items, image_preference)
+        candidates.append(Outfit(
+            top=top,
+            bottom=bottom,
+            shoes=shoe,
+            total_price=total,
+            score=round(base_score + preference_bonus, 3),
+            base_score=base_score,
+            image_preference_bonus=preference_bonus,
+            recommendation_reasons=reasons,
+        ))
     candidates.sort(key=_base_sort_key)
     return _rerank_for_diversity(candidates, limit)
