@@ -69,7 +69,7 @@ def show_product_card(label: str, product: Product) -> None:
         st.image(
             str(product_image_path(product.id)),
             caption=f"{label}商品示意图",
-            width="stretch",
+            use_column_width=True,
         )
         st.caption("🏷️ 演示商品")
         st.markdown(f"**{product.name}**")
@@ -115,13 +115,13 @@ def show_anchor_slot(
             st.image(
                 anchor_preview,
                 caption="我的单品",
-                width="stretch",
+                use_column_width=True,
             )
         else:
             st.image(
                 str(placeholder_image_path()),
                 caption="我的单品图片不可用",
-                width="stretch",
+                use_column_width=True,
             )
         st.caption("📌 我的单品")
         st.markdown(f"**{anchor.name}**")
