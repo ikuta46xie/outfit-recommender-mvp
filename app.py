@@ -25,7 +25,8 @@ from image_preferences import (
     infer_preference_defaults,
     store_confirmed_preference,
 )
-from recommender import Outfit, load_products, recommend_outfits
+from product_visuals import placeholder_image_path, product_image_path
+from recommender import Outfit, Product, load_products, recommend_outfits
 from vision_analyzer import (
     DEFAULT_MODEL,
     ImageProcessingError,
@@ -43,7 +44,7 @@ DATA_PATH = Path(__file__).parent / "data" / "products.csv"
 NORMAL_MODE = "普通推荐"
 IMAGE_GUIDED_MODE = "参考图片偏好"
 ANCHOR_MODE = "围绕图片单品"
-st.set_page_config(page_title="穿搭推荐 MVP", page_icon="👔", layout="centered")
+st.set_page_config(page_title="AI 穿搭推荐助手", page_icon="👔", layout="wide")
 
 
 @st.cache_data
@@ -62,63 +63,103 @@ def available_shoe_sizes() -> list[str]:
     return sorted(sizes, key=int)
 
 
-def show_product(label: str, product_name: str, color: str, price: int, size: str) -> None:
-    st.markdown(f"**{label}｜{product_name}**")
-    st.caption(f"{color} · {size} · ¥{price}")
+def show_product_card(label: str, product: Product) -> None:
+    """用本地示意图和 CSV 真实字段展示一个演示商品。"""
+    with st.container(border=True):
+        st.image(
+            str(product_image_path(product.id)),
+            caption=f"{label}商品示意图",
+            width="stretch",
+        )
+        st.caption("🏷️ 演示商品")
+        st.markdown(f"**{product.name}**")
+        st.caption(f"类别：{label}")
+        st.caption(f"颜色：{product.color}")
+        st.caption(f"可用尺码：{' / '.join(product.sizes)}")
+        st.markdown(f"**价格：¥{product.price}**")
+
+
+def show_outfit_metrics(outfit: Outfit, *, image_guided: bool) -> None:
+    if image_guided:
+        total, base, bonus = st.columns(3)
+        total.metric("总价", f"¥{outfit.total_price}")
+        base.metric("基础匹配分", f"{outfit.base_score:.1f}")
+        bonus.metric("图片偏好加分", f"+{outfit.image_preference_bonus:.1f}")
+        st.markdown("**推荐理由**")
+        for reason in outfit.recommendation_reasons:
+            st.caption(f"• {reason}")
+    else:
+        total, score = st.columns(2)
+        total.metric("总价", f"¥{outfit.total_price}")
+        score.metric("匹配分", f"{outfit.score:.1f}")
 
 
 def show_outfit(index: int, outfit: Outfit, *, image_guided: bool = False) -> None:
     with st.container(border=True):
         st.subheader(f"搭配 {index}")
-        columns = st.columns(3)
+        columns = st.columns(3, gap="small")
         for column, label, item in zip(columns, ("上衣", "裤子", "鞋子"), (outfit.top, outfit.bottom, outfit.shoes)):
             with column:
-                show_product(label, item.name, item.color, item.price, "/".join(item.sizes))
-        if image_guided:
-            st.markdown(
-                f"**总价：¥{outfit.total_price}**　"
-                f"基础匹配分：{outfit.base_score:.1f}　"
-                f"图片偏好加分：+{outfit.image_preference_bonus:.1f}"
+                show_product_card(label, item)
+        show_outfit_metrics(outfit, image_guided=image_guided)
+
+
+def show_anchor_slot(
+    label: str,
+    anchor: AnchorItem,
+    anchor_preview: bytes | None,
+) -> None:
+    """仅使用本次运行内存中的当前上传图展示自有锚点。"""
+    with st.container(border=True):
+        if anchor_preview is not None:
+            st.image(
+                anchor_preview,
+                caption="我的单品",
+                width="stretch",
             )
-            for reason in outfit.recommendation_reasons:
-                st.caption(f"• {reason}")
         else:
-            st.markdown(f"**总价：¥{outfit.total_price}**　匹配分：{outfit.score:.1f}")
+            st.image(
+                str(placeholder_image_path()),
+                caption="我的单品图片不可用",
+                width="stretch",
+            )
+        st.caption("📌 我的单品")
+        st.markdown(f"**{anchor.name}**")
+        st.caption(f"类别：{label}")
+        st.caption(f"确认颜色：{anchor.primary_color or UNSPECIFIED}")
+        st.caption(f"确认风格：{anchor.style or UNSPECIFIED}")
+        st.caption("自有单品，不计入预算")
 
 
-def show_anchor_slot(label: str, anchor: AnchorItem) -> None:
-    st.markdown(f"**{label}｜我的单品**")
-    st.markdown(f"**{anchor.name}**")
-    st.caption(
-        f"{anchor.primary_color or UNSPECIFIED} · {anchor.style or UNSPECIFIED}"
-    )
-    st.caption("自有单品，不计入预算")
-
-
-def show_anchored_outfit(index: int, outfit: AnchoredOutfit) -> None:
+def show_anchored_outfit(
+    index: int,
+    outfit: AnchoredOutfit,
+    anchor_preview: bytes | None,
+) -> None:
     with st.container(border=True):
         st.subheader(f"搭配 {index}")
-        columns = st.columns(3)
+        columns = st.columns(3, gap="small")
         for column, category in zip(columns, ("上衣", "裤子", "鞋子")):
             item = outfit.item_for_category(category)
             with column:
                 if isinstance(item, AnchorItem):
-                    show_anchor_slot(category, item)
+                    show_anchor_slot(category, item, anchor_preview)
                 else:
-                    show_product(
-                        category,
-                        item.name,
-                        item.color,
-                        item.price,
-                        "/".join(item.sizes),
-                    )
-        st.markdown(
-            f"**需购买商品总价：¥{outfit.total_price}**　"
-            f"基础匹配分：{outfit.base_score:.1f}　"
-            f"锚点匹配加分：+{outfit.anchor_match_bonus:.1f}"
-        )
+                    show_product_card(category, item)
+        total, base, bonus = st.columns(3)
+        total.metric("需购买商品总价", f"¥{outfit.total_price}")
+        base.metric("基础匹配分", f"{outfit.base_score:.1f}")
+        bonus.metric("锚点匹配加分", f"+{outfit.anchor_match_bonus:.1f}")
+        st.markdown("**推荐理由**")
         for reason in outfit.recommendation_reasons:
             st.caption(f"• {reason}")
+
+
+def show_result_header(mode: str, count: int) -> None:
+    st.divider()
+    st.subheader("推荐结果")
+    st.caption(f"当前模式：{mode}｜找到 {count} 套搭配")
+    st.caption("商品图片为本地生成的演示示意图，不代表真实商品外观。")
 
 
 def load_qwen_config() -> QwenConfig | None:
@@ -267,13 +308,15 @@ def show_anchor_confirmation(
     return confirmed_anchor_for(st.session_state, cache_key)
 
 
-st.title("👔 穿搭推荐 MVP")
-st.write("选择你的需求，我们会从本地演示商品中组合最多三套穿搭。")
+st.title("👔 AI 穿搭推荐助手")
+st.write("可使用普通推荐、参考图片偏好或围绕图片单品三种模式，从本地演示商品中组合最多三套穿搭。")
 st.info("当前商品均为演示数据，不代表真实库存、价格或购买链接。")
+st.caption("商品图片为本地生成的演示示意图，不代表真实商品外观。")
 
 current_cache_key: str | None = None
 current_image_preference: ImagePreference | None = None
 current_anchor_item: AnchorItem | None = None
+current_anchor_preview: bytes | None = None
 
 with st.container(border=True):
     st.subheader("上传服装图片")
@@ -289,6 +332,7 @@ with st.container(border=True):
         except ImageProcessingError as error:
             st.error(error.user_message)
         else:
+            current_anchor_preview = processed_image.jpeg_bytes
             st.image(processed_image.jpeg_bytes, caption="图片预览", width=360)
             st.caption(f"文件名：{uploaded_image.name}")
             st.info("点击分析后，图片将临时发送至阿里云百炼进行识别；本站不会保存图片。")
@@ -359,6 +403,8 @@ if current_image_preference is not None:
 if current_anchor_item is not None:
     available_modes.append(ANCHOR_MODE)
 
+st.divider()
+st.subheader("推荐条件")
 with st.form("recommendation_form"):
     recommendation_mode = st.radio(
         "推荐模式",
@@ -411,12 +457,13 @@ if submitted:
             excluded_colors=excluded_colors,
             limit=3,
         )
+        show_result_header(recommendation_mode, len(anchored_outfits))
         if not anchored_outfits:
             st.warning("当前条件下没有可补齐的搭配，请提高补全预算或减少筛选条件。")
         else:
             st.success(f"找到 {len(anchored_outfits)} 套补全搭配")
             for number, outfit in enumerate(anchored_outfits, start=1):
-                show_anchored_outfit(number, outfit)
+                show_anchored_outfit(number, outfit, current_anchor_preview)
     else:
         preference = (
             current_image_preference
@@ -427,6 +474,7 @@ if submitted:
             bottom_size=bottom_size, scene=scene, style=style,
             excluded_colors=excluded_colors, limit=3,
             image_preference=preference)
+        show_result_header(recommendation_mode, len(outfits))
         if not outfits:
             st.warning("当前条件下没有符合预算的完整搭配，请提高预算或减少筛选条件。")
         else:

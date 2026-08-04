@@ -1,6 +1,6 @@
 # 穿搭推荐 MVP
 
-一个 Streamlit 中文穿搭推荐应用。V0.5 支持把上传图片中经用户确认的自有单品作为锚点，从演示商品库补齐另外两个类别。
+一个 Streamlit 中文穿搭推荐应用。V0.6 为三种推荐模式加入本地商品示意图和可视化搭配卡片；V0.5 的推荐算法、评分、排序与硬约束保持不变。
 
 > `data/products.csv` 中的 24 条商品均为“演示数据（非真实库存）”，不代表真实价格、库存或购买链接。
 
@@ -21,6 +21,12 @@
 - 普通推荐和 V0.4“参考图片偏好”模式继续保留，三种模式互相独立
 - V0.5 不是虚拟试穿，不生成服装、人物或穿着效果图
 - 确认锚点、修改条件和生成补全搭配不会增加千问 API 调用
+- V0.6 为 24 件演示商品提供程序生成的本地 SVG 示意图，并用三列卡片展示商品图片、类别、名称、颜色、尺码和价格
+- 商品示意图是统一风格的演示插图，不是真实商品照片，不依赖远程图片 URL，也不会在运行时访问网络
+- 商品图片按商品 ID 从 `assets/products/` 安全映射；文件缺失或 ID 非法时降级到本地占位图
+- 锚点模式只用当前上传图片在内存中的处理结果作为“我的单品”预览，不写入磁盘、数据库或仓库
+- 普通推荐、参考图片偏好和围绕图片单品的商品、分数、顺序、理由及全部硬约束保持不变
+- V0.6 不是虚拟试穿，不生成真人穿着效果图，也不增加千问 API 调用
 - 当前会话对同图同模型复用分析结果，并限制最多分析 3 张不同图片
 - 按场景、整套预算、上衣尺码、裤子尺码、风格和排除颜色筛选
 - 每套搭配固定包含上衣、裤子和鞋子，且总价不超过预算
@@ -42,6 +48,16 @@ streamlit run app.py
 
 浏览器将默认打开 `http://localhost:8501`。
 
+## 重新生成商品示意图
+
+仓库已经提交 24 个商品 SVG 和一个通用占位图，Streamlit 启动时不会重新生成或写入这些文件。商品数据变更后，可在仓库根目录手动运行：
+
+```bash
+python scripts/generate_product_assets.py
+```
+
+脚本仅使用 Python 标准库读取 `data/products.csv`，按商品 ID、类别和颜色确定性生成 `assets/products/*.svg`，不访问网络，也不需要新增图片处理依赖。
+
 ## 千问视觉配置
 
 项目使用百炼华北2（北京）地域的 OpenAI 兼容接口。复制占位示例并在本地填写自己的配置：
@@ -61,6 +77,7 @@ model = "qwen3.7-flash"
 - 只有点击分析按钮后，压缩图片才会临时发送至阿里云百炼
 - 会话缓存仅保存经过字段校验的分析结果，以及图片哈希等去重元数据，不保存图片内容
 - 应用不会展示上游原始异常、API Key、Workspace ID、Base URL 或图片 Base64
+- 本地商品 SVG 不包含 JavaScript、外部资源、外部字体、`foreignObject`、Base64 图片或用户输入
 
 ## 测试
 
@@ -74,6 +91,8 @@ V0.4 还覆盖颜色与风格别名映射、用户修改优先级、图片缓存
 
 V0.5 还覆盖锚点类别映射、名称校验、缓存键绑定、三类补全组合、鞋码和其他硬约束、仅购买商品计价、锚点软评分、真实理由、多样性重排、三模式回归及无额外 API 调用。
 
+V0.6 还覆盖 24 个商品资产映射、三类服装轮廓、XML 有效性、白色轮廓可见性、SVG 主动内容与外部资源检查、路径穿越防护、占位图降级、三种卡片展示、锚点图片内存展示，以及 V0.5 三模式固定输出回归。
+
 ## 主要数据流
 
 1. `app.py` 接收可选图片；`vision_analyzer.py` 在内存中校验、纠正方向、缩放并压缩图片。
@@ -85,7 +104,8 @@ V0.5 还覆盖锚点类别映射、名称校验、缓存键绑定、三类补全
 7. `recommender.py` 保持普通推荐与图片偏好模式；先按预算、尺码、场景、原风格和排除颜色生成合法三件套。
 8. `anchor_recommender.py` 根据锚点类别只组合缺少的两个 CSV 类别，并按补全预算、对应尺码（含鞋码）、场景、原风格和排除颜色应用硬约束。
 9. 两类推荐器分别计算既有图片偏好分或锚点匹配分，按最终分确定性排序后执行多样性贪心重排。
-10. Streamlit 展示最多三套结果；锚点位置明确标记为“我的单品”和“不计入预算”。
+10. `product_visuals.py` 按商品 ID 安全映射到 `assets/products/` 中预生成的本地 SVG；缺失或非法 ID 使用本地占位图。
+11. Streamlit 用三列卡片展示最多三套结果；锚点位置只展示当前上传图片的内存处理结果，并明确标记为“我的单品”和“不计入预算”。
 
 ## 项目结构
 
@@ -95,14 +115,22 @@ V0.5 还覆盖锚点类别映射、名称校验、缓存键绑定、三类补全
 ├── anchor_item.py
 ├── anchor_recommender.py
 ├── image_preferences.py
+├── product_visuals.py
 ├── recommender.py
 ├── vision_analyzer.py
+├── assets/products/
+│   ├── TOP001.svg ... TOP008.svg
+│   ├── BOTTOM001.svg ... BOTTOM008.svg
+│   ├── SHOES001.svg ... SHOES008.svg
+│   └── placeholder.svg
 ├── data/products.csv
+├── scripts/generate_product_assets.py
 ├── .streamlit/secrets.example.toml
 ├── tests/test_app.py
 ├── tests/test_anchor_item.py
 ├── tests/test_anchor_recommender.py
 ├── tests/test_image_preferences.py
+├── tests/test_product_visuals.py
 ├── tests/test_recommender.py
 ├── tests/test_vision_analyzer.py
 ├── requirements.txt
