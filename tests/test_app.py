@@ -101,7 +101,12 @@ def test_uploaded_image_is_previewed_with_filename():
     generate_button.click().run()
 
     assert any(message.value == "找到 3 套符合条件的搭配" for message in app.success)
-    assert len(app.image) == 1
+    assert len(app.image) == 10
+    assert sum(
+        image.captions[0].endswith("商品示意图")
+        for image in app.image
+        if image.captions
+    ) == 9
 
 
 def test_damaged_image_is_rejected_without_breaking_recommendations():
@@ -153,7 +158,8 @@ def test_confirming_and_generating_do_not_call_api(monkeypatch):
     generate.click().run()
 
     assert analyzer.call_count == 0
-    assert any("图片偏好加分" in markdown.value for markdown in app.markdown)
+    assert sum(metric.label == "图片偏好加分" for metric in app.metric) == 3
+    assert any(markdown.value == "**推荐理由**" for markdown in app.markdown)
 
 
 def test_new_image_does_not_reuse_old_confirmed_preference(monkeypatch):
@@ -211,7 +217,13 @@ def test_anchor_item_can_be_edited_confirmed_and_used_without_api(monkeypatch):
     assert analyzer.call_count == 0
     assert any(message.value == "找到 3 套补全搭配" for message in app.success)
     assert any(caption.value == "自有单品，不计入预算" for caption in app.caption)
-    assert any("需购买商品总价" in markdown.value for markdown in app.markdown)
+    assert sum(metric.label == "需购买商品总价" for metric in app.metric) == 3
+    assert sum(image.captions == ["我的单品"] for image in app.image) == 3
+    assert sum(
+        image.captions[0].endswith("商品示意图")
+        for image in app.image
+        if image.captions
+    ) == 6
 
 
 def test_three_modes_are_independently_enabled_after_both_confirmations(monkeypatch):
@@ -246,4 +258,51 @@ def test_new_image_does_not_reuse_old_anchor_item(monkeypatch):
     mode = next(radio for radio in app.radio if radio.label == "推荐模式")
     assert mode.options == ["普通推荐"]
     assert mode.disabled
+    assert not any(image.captions == ["我的单品"] for image in app.image)
+    assert analyzer.call_count == 0
+
+
+def test_normal_mode_shows_three_complete_local_product_card_rows():
+    app = AppTest.from_file(APP_PATH).run()
+    next(button for button in app.button if button.label == "生成穿搭").click().run()
+
+    product_captions = [
+        image.captions[0]
+        for image in app.image
+        if image.captions and image.captions[0].endswith("商品示意图")
+    ]
+    assert product_captions.count("上衣商品示意图") == 3
+    assert product_captions.count("裤子商品示意图") == 3
+    assert product_captions.count("鞋子商品示意图") == 3
+    assert sum(caption.value == "🏷️ 演示商品" for caption in app.caption) == 9
+    assert sum(metric.label == "总价" for metric in app.metric) == 3
+    assert sum(metric.label == "匹配分" for metric in app.metric) == 3
+    assert any(
+        caption.value == "当前模式：普通推荐｜找到 3 套搭配"
+        for caption in app.caption
+    )
+
+
+def test_anchor_preview_stays_in_memory_and_no_upload_file_is_created(monkeypatch):
+    analyzer = Mock(side_effect=AssertionError("API must not be called"))
+    monkeypatch.setattr(vision_analyzer, "analyze_with_session_cache", analyzer)
+    project_images_before = {
+        path for suffix in ("*.jpg", "*.jpeg", "*.png") for path in APP_PATH.parent.rglob(suffix)
+    }
+    app, _ = cached_analysis_app(analyzer, single_item_analysis())
+    next(
+        button for button in app.button
+        if button.label == "确认这件单品并补全搭配"
+    ).click().run()
+    next(radio for radio in app.radio if radio.label == "推荐模式").set_value(
+        "围绕图片单品"
+    ).run()
+    next(button for button in app.button if button.label == "生成穿搭").click().run()
+    project_images_after = {
+        path for suffix in ("*.jpg", "*.jpeg", "*.png") for path in APP_PATH.parent.rglob(suffix)
+    }
+
+    assert project_images_after == project_images_before
+    assert not (APP_PATH.parent / "demo-outfit.png").exists()
+    assert sum(image.captions == ["我的单品"] for image in app.image) == 3
     assert analyzer.call_count == 0

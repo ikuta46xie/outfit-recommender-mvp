@@ -175,3 +175,31 @@ def test_anchor_results_are_reproducible_and_diverse():
     assert first == second
     assert len({outfit.item_for_category("裤子").id for outfit in first}) == 3
     assert len({outfit.item_for_category("鞋子").id for outfit in first}) == 3
+
+
+def test_v05_anchor_order_prices_scores_and_reasons_remain_unchanged():
+    outfits = recommend_anchor_outfits(DATA_PATH, anchor=make_anchor("上衣"), **COMMON)
+
+    assert [outfit.product_ids for outfit in outfits] == [
+        ("BOTTOM007", "SHOES002"),
+        ("BOTTOM002", "SHOES004"),
+        ("BOTTOM001", "SHOES007"),
+    ]
+    assert [outfit.total_price for outfit in outfits] == [768, 668, 668]
+    assert [outfit.base_score for outfit in outfits] == [15.1, 14.683, 14.733]
+    assert [outfit.anchor_match_bonus for outfit in outfits] == [1.55, 1.55, 0.9]
+    assert [outfit.score for outfit in outfits] == [16.65, 16.233, 15.633]
+    assert [outfit.recommendation_reasons for outfit in outfits] == [
+        (
+            "黑色德比鞋与自有单品主色一致",
+            "米白垂感阔腿裤与黑色自有单品形成中性色协调",
+        ),
+        (
+            "黑色九分烟管裤与自有单品主色一致",
+            "燕麦色乐福鞋与黑色自有单品形成中性色协调",
+        ),
+        (
+            "深灰直筒西裤与黑色自有单品形成中性色协调",
+            "推荐单品包含与自有单品一致的商务风格",
+        ),
+    ]
