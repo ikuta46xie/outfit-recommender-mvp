@@ -9,6 +9,31 @@ from typing import Any
 
 UNSPECIFIED = "不指定"
 REFERENCE_STYLES = ("简约", "休闲", "商务", "运动")
+NEUTRAL_COLORS = frozenset({"黑色", "白色", "灰色", "米色", "藏蓝"})
+COORDINATING_COLOR_PAIRS = frozenset({
+    frozenset(("黑色", "白色")),
+    frozenset(("黑色", "灰色")),
+    frozenset(("黑色", "米色")),
+    frozenset(("黑色", "藏蓝")),
+    frozenset(("白色", "灰色")),
+    frozenset(("白色", "米色")),
+    frozenset(("白色", "藏蓝")),
+    frozenset(("灰色", "米色")),
+    frozenset(("灰色", "藏蓝")),
+    frozenset(("米色", "藏蓝")),
+    frozenset(("蓝色", "白色")),
+    frozenset(("蓝色", "灰色")),
+    frozenset(("蓝色", "米色")),
+    frozenset(("蓝色", "藏蓝")),
+    frozenset(("粉色", "白色")),
+    frozenset(("粉色", "灰色")),
+    frozenset(("粉色", "米色")),
+    frozenset(("绿色", "米色")),
+    frozenset(("绿色", "卡其色")),
+    frozenset(("绿色", "棕色")),
+    frozenset(("卡其色", "棕色")),
+    frozenset(("卡其色", "藏蓝")),
+})
 
 _COLOR_ALIASES = {
     "黑": "黑色",
@@ -121,6 +146,16 @@ def normalize_style(values: str | Iterable[str]) -> str:
         if mapped is not None:
             return mapped
     return UNSPECIFIED
+
+
+def colors_coordinate(first: str, second: str) -> bool:
+    """返回两个不同颜色是否命中共享的明确协调色规则。"""
+    return first != second and frozenset((first, second)) in COORDINATING_COLOR_PAIRS
+
+
+def is_neutral_coordination(first: str, second: str) -> bool:
+    """返回协调色是否属于中性色组合。"""
+    return colors_coordinate(first, second) and first in NEUTRAL_COLORS and second in NEUTRAL_COLORS
 
 
 def infer_preference_defaults(
